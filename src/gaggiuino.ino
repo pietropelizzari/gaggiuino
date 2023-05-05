@@ -1,6 +1,5 @@
 // #define SINGLE_HX711_CLOCK
 #define DEBUG_ENABLED
-// #define MAX31855_ENABLED
 #define TIMERINTERRUPT_ENABLED
 #if defined(DEBUG_ENABLED) && defined(ARDUINO_ARCH_STM32)
   #include "dbg.h"
@@ -12,11 +11,8 @@
   #include <FlashStorage_STM32.h>
 #endif
 #include <EasyNextionLibrary.h>
-#if defined(MAX31855_ENABLED)
-  #include <Adafruit_MAX31855.h>
-#else
-  #include <max6675.h>
-#endif
+#include <Adafruit_MAX31865.h>
+#define RREF 430.0
 #if defined(SINGLE_HX711_CLOCK)
   #include <HX711_2.h>
 #else
@@ -28,8 +24,9 @@
 #if defined(ARDUINO_ARCH_AVR)
   // ATMega32P pins definitions
   #define zcPin 2
-  #define thermoDO 4
-  #define thermoCS 5
+  #define thermoCS 3
+  #define thermoMOSI 4
+  #define thermoMISO 5
   #define thermoCLK 6
   #define steamPin 7
   #define relayPin 8  // PB0
@@ -107,11 +104,9 @@
 ADS1115 ADS(0x48);
 #endif
 //Init the thermocouples with the appropriate pins defined above with the prefix "thermo"
-#if defined(ADAFRUIT_MAX31855_H)
-  Adafruit_MAX31855 thermocouple(thermoCLK, thermoCS, thermoDO);
-#else
-  MAX6675 thermocouple(thermoCLK, thermoCS, thermoDO);
-#endif
+
+Adafruit_MAX31865 thermocouple(thermoCS, thermoMOSI, thermoMISO, thermoCLK);
+
 // EasyNextion object init
 EasyNex myNex(USART_CH);
 //Banoz PSM - for more cool shit visit https://github.com/banoz  and don't forget to star
@@ -139,6 +134,7 @@ unsigned long activeBrewingStart = 4294967295; // max value so timer only update
 volatile float kProbeReadValue; //temp val
 volatile float livePressure;
 volatile float liveWeight;
+uint16_t rtd;
 
 //scales vars
 /* If building for STM32 define the scales factors here */
@@ -261,9 +257,7 @@ void setup() {
     initPressure(myNex.readNumber("regHz"));
   #endif
 
-  #if defined(ADAFRUIT_MAX31855_H)
-    thermocouple.begin();
-  #endif
+  thermocouple.begin(MAX31865_3WIRE);
 
   // Scales handling
   scalesInit();
@@ -297,7 +291,10 @@ void sensorsRead() { // Reading the thermocouple temperature
   // static long thermoTimer;
   // Reading the temperature every 350ms between the loops
   if (millis() > thermoTimer) {
-    kProbeReadValue = thermocouple.readCelsius();  // Making sure we're getting a value
+    kProbeReadValue = thermocouple.temperature(100, RREF);
+    rtd = thermocouple.readRTD();
+
+
     /*
     This *while* is here to prevent situations where the system failed to get a temp reading and temp reads as 0 or -7(cause of the offset)
     If we would use a non blocking function then the system would keep the SSR in HIGH mode which would most definitely cause boiler overheating
@@ -307,7 +304,7 @@ void sensorsRead() { // Reading the thermocouple temperature
       we force set it to LOW while trying to get a temp reading - IMPORTANT safety feature */
       setBoiler(LOW);
       if (millis() > thermoTimer) {
-        kProbeReadValue = thermocouple.readCelsius();  // Making sure we're getting a value
+        kProbeReadValue = thermocouple.temperature(100, RREF);
         thermoTimer = millis() + GET_KTYPE_READ_EVERY;
       }
     }
